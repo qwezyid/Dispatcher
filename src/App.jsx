@@ -39,7 +39,7 @@ const DispatcherPanel = () => {
       try {
         // Загружаем CSV данные через fetch
         const [masterResponse, routeResponse, driverResponse, segmentResponse] = await Promise.all([
-          fetch('/data/master_clean.csv'),
+          fetch('/data/gotovie_dannie.csv'),
           fetch('/data/route_summary.csv'),
           fetch('/data/driver_summary.csv'),
           fetch('/data/top30_routes_with_segments.csv')
@@ -71,12 +71,20 @@ const DispatcherPanel = () => {
     loadData();
   }, []);
 
-  // Получение уникальных городов
+  // Получение уникальных городов из нового формата
   const cities = useMemo(() => {
     const citySet = new Set();
     masterData.forEach(row => {
-      if (row.origin_city) citySet.add(row.origin_city);
-      if (row.dest_city) citySet.add(row.dest_city);
+      // Извлекаем города из полей "Откуда полный" и "Куда полный"
+      if (row['Откуда полный']) {
+        // Берем первое слово как город
+        const city = row['Откуда полный'].split(',')[0].split(' ')[0];
+        if (city) citySet.add(city.trim());
+      }
+      if (row['Куда полный']) {
+        const city = row['Куда полный'].split(',')[0].split(' ')[0];
+        if (city) citySet.add(city.trim());
+      }
     });
     return Array.from(citySet).sort();
   }, [masterData]);
@@ -102,11 +110,13 @@ const DispatcherPanel = () => {
 
     // Зональные совпадения (водители из тех же городов)
     const zoneMatches = driverData.filter(driver => {
-      const driverRoutes = masterData.filter(record => record.driver_name === driver.driver_name);
-      return driverRoutes.some(route => 
-        route.origin_city?.toLowerCase() === searchFrom.toLowerCase() || 
-        route.dest_city?.toLowerCase() === searchTo.toLowerCase()
-      );
+      const driverRoutes = masterData.filter(record => record['Водитель'] === driver.driver_name);
+      return driverRoutes.some(route => {
+        const originCity = route['Откуда полный']?.split(',')[0].split(' ')[0]?.trim();
+        const destCity = route['Куда полный']?.split(',')[0].split(' ')[0]?.trim();
+        return originCity?.toLowerCase() === searchFrom.toLowerCase() || 
+               destCity?.toLowerCase() === searchTo.toLowerCase();
+      });
     }).slice(0, 10);
 
     return { exact: exactMatches, partial: partialMatches, zone: zoneMatches };
@@ -126,30 +136,31 @@ const DispatcherPanel = () => {
 
   // Получение детальной информации о водителе
   const getDriverDetails = (driverName) => {
-    const driverTrips = masterData.filter(trip => trip.driver_name === driverName);
+    const driverTrips = masterData.filter(trip => trip['Водитель'] === driverName);
     const routes = {};
     
     driverTrips.forEach(trip => {
-      const routeKey = `${trip.origin_city} → ${trip.dest_city}`;
+      const originCity = trip['Откуда полный']?.split(',')[0].split(' ')[0]?.trim();
+      const destCity = trip['Куда полный']?.split(',')[0].split(' ')[0]?.trim();
+      const routeKey = `${originCity} → ${destCity}`;
+      
       if (!routes[routeKey]) {
         routes[routeKey] = {
           route: routeKey,
-          origin_city: trip.origin_city,
-          dest_city: trip.dest_city,
+          origin_city: originCity,
+          dest_city: destCity,
           trips: 0,
           prices: [],
           costs: [],
-          margins: [],
           lastDate: null,
           cities: []
         };
       }
       routes[routeKey].trips++;
-      if (trip.price_declared) routes[routeKey].prices.push(trip.price_declared);
-      if (trip.route_cost) routes[routeKey].costs.push(trip.route_cost);
-      if (trip.margin) routes[routeKey].margins.push(trip.margin);
-      if (trip.date && (!routes[routeKey].lastDate || new Date(trip.date) > new Date(routes[routeKey].lastDate))) {
-        routes[routeKey].lastDate = trip.date;
+      if (trip['ОБЪЯВЛЕННАЯ ЦЕНА']) routes[routeKey].prices.push(trip['ОБЪЯВЛЕННАЯ ЦЕНА']);
+      if (trip['СЕБЕСТОИМОСТЬ МАРШРУТА']) routes[routeKey].costs.push(trip['СЕБЕСТОИМОСТЬ МАРШРУТА']);
+      if (trip['Дата создания'] && (!routes[routeKey].lastDate || new Date(trip['Дата создания']) > new Date(routes[routeKey].lastDate))) {
+        routes[routeKey].lastDate = trip['Дата создания'];
       }
     });
 
@@ -169,7 +180,8 @@ const DispatcherPanel = () => {
       ...route,
       avgPrice: route.prices.length ? route.prices.reduce((a, b) => a + b, 0) / route.prices.length : 0,
       avgCost: route.costs.length ? route.costs.reduce((a, b) => a + b, 0) / route.costs.length : 0,
-      avgMargin: route.margins.length ? route.margins.reduce((a, b) => a + b, 0) / route.margins.length : 0
+      avgMargin: route.prices.length && route.costs.length ? 
+        (route.prices.reduce((a, b) => a + b, 0) - route.costs.reduce((a, b) => a + b, 0)) / route.prices.length : 0
     })).sort((a, b) => b.trips - a.trips);
   };
 
@@ -187,34 +199,34 @@ const DispatcherPanel = () => {
 
   // Получение детальной информации о маршруте
   const getRouteDetails = (originCity, destCity) => {
-    const routeTrips = masterData.filter(trip => 
-      trip.origin_city === originCity && trip.dest_city === destCity
-    );
+    const routeTrips = masterData.filter(trip => {
+      const tripOrigin = trip['Откуда полный']?.split(',')[0].split(' ')[0]?.trim();
+      const tripDest = trip['Куда полный']?.split(',')[0].split(' ')[0]?.trim();
+      return tripOrigin === originCity && tripDest === destCity;
+    });
     
     const drivers = {};
     const cities = new Set([originCity]);
     
     routeTrips.forEach(trip => {
       // Собираем водителей
-      if (!drivers[trip.driver_name]) {
-        drivers[trip.driver_name] = {
-          driver_name: trip.driver_name,
-          driver_phone: trip.driver_phone,
+      if (!drivers[trip['Водитель']]) {
+        drivers[trip['Водитель']] = {
+          driver_name: trip['Водитель'],
+          driver_phone: trip['Номер телефона'],
           trips: 0,
           prices: [],
           costs: [],
-          margins: [],
           lastDate: null,
           vehicles: new Set()
         };
       }
-      drivers[trip.driver_name].trips++;
-      if (trip.price_declared) drivers[trip.driver_name].prices.push(trip.price_declared);
-      if (trip.route_cost) drivers[trip.driver_name].costs.push(trip.route_cost);
-      if (trip.margin) drivers[trip.driver_name].margins.push(trip.margin);
-      if (trip.brand && trip.model) drivers[trip.driver_name].vehicles.add(`${trip.brand} ${trip.model}`);
-      if (trip.date && (!drivers[trip.driver_name].lastDate || new Date(trip.date) > new Date(drivers[trip.driver_name].lastDate))) {
-        drivers[trip.driver_name].lastDate = trip.date;
+      drivers[trip['Водитель']].trips++;
+      if (trip['ОБЪЯВЛЕННАЯ ЦЕНА']) drivers[trip['Водитель']].prices.push(trip['ОБЪЯВЛЕННАЯ ЦЕНА']);
+      if (trip['СЕБЕСТОИМОСТЬ МАРШРУТА']) drivers[trip['Водитель']].costs.push(trip['СЕБЕСТОИМОСТЬ МАРШРУТА']);
+      if (trip['Марка'] && trip['Модель']) drivers[trip['Водитель']].vehicles.add(`${trip['Марка']} ${trip['Модель']}`);
+      if (trip['Дата создания'] && (!drivers[trip['Водитель']].lastDate || new Date(trip['Дата создания']) > new Date(drivers[trip['Водитель']].lastDate))) {
+        drivers[trip['Водитель']].lastDate = trip['Дата создания'];
       }
     });
 
@@ -236,7 +248,8 @@ const DispatcherPanel = () => {
         vehicles: Array.from(driver.vehicles),
         avgPrice: driver.prices.length ? driver.prices.reduce((a, b) => a + b, 0) / driver.prices.length : 0,
         avgCost: driver.costs.length ? driver.costs.reduce((a, b) => a + b, 0) / driver.costs.length : 0,
-        avgMargin: driver.margins.length ? driver.margins.reduce((a, b) => a + b, 0) / driver.margins.length : 0
+        avgMargin: driver.prices.length && driver.costs.length ? 
+          (driver.prices.reduce((a, b) => a + b, 0) - driver.costs.reduce((a, b) => a + b, 0)) / driver.prices.length : 0
       })).sort((a, b) => b.trips - a.trips),
       cities: Array.from(cities),
       totalTrips: routeTrips.length
@@ -372,7 +385,7 @@ const DispatcherPanel = () => {
                               <div>Рейсов: {route.total_trips}</div>
                               <div>Водителей: {route.unique_drivers}</div>
                               <div className="text-green-600 font-medium">
-                                Ср. цена: {formatPrice(route.avg_declared)}
+                                Ср. стоимость: {formatPrice(route.avg_cost)}
                               </div>
                             </div>
                             <div className="text-xs text-gray-500 mt-2">
@@ -434,7 +447,7 @@ const DispatcherPanel = () => {
                               <div>Рейсов: {driver.total_trips}</div>
                               <div>Маршрутов: {driver.unique_routes}</div>
                               <div className="text-orange-600 font-medium">
-                                Ср. ставка: {formatPrice(driver.avg_cost)}
+                                Ср. стоимость: {formatPrice(driver.avg_cost)}
                               </div>
                             </div>
                             <div className="text-xs text-gray-500 mt-2">
@@ -486,9 +499,9 @@ const DispatcherPanel = () => {
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Маршрут</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Рейсов</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Водителей</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Средняя цена</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Диапазон цен</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Средняя ставка</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Средняя стоимость</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Диапазон стоимости</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Общая стоимость</th>
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
@@ -503,11 +516,11 @@ const DispatcherPanel = () => {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-gray-900">{route.total_trips || 0}</td>
                       <td className="px-6 py-4 whitespace-nowrap text-gray-900">{route.unique_drivers || 0}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-green-600 font-medium">{formatPrice(route.avg_declared)}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-green-600 font-medium">{formatPrice(route.avg_cost)}</td>
                       <td className="px-6 py-4 whitespace-nowrap text-gray-600 text-sm">
-                        {formatPrice(route.min_declared)} - {formatPrice(route.max_declared)}
+                        {formatPrice(route.min_cost)} - {formatPrice(route.max_cost)}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-blue-600 font-medium">{formatPrice(route.avg_cost)}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-blue-600 font-medium">{formatPrice(route.total_cost)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -550,8 +563,8 @@ const DispatcherPanel = () => {
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Телефон</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Рейсов</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Маршрутов</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ср. цена</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ср. ставка</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Средняя стоимость</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Общая стоимость</th>
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
@@ -561,38 +574,38 @@ const DispatcherPanel = () => {
                       className="hover:bg-gray-50 cursor-pointer"
                       onClick={() => openDriverCard(driver)}
                     >
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="font-medium text-blue-600 hover:text-blue-800">{driver.driver_name}</div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-gray-600 text-sm">
-                        <div className="flex items-center">
-                          <Phone className="h-4 w-4 mr-1" />
-                          {formatPhone(driver.driver_phone)}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-gray-900">{driver.total_trips || 0}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-gray-900">{driver.unique_routes || 0}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-green-600 font-medium">{formatPrice(driver.avg_declared)}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-blue-600 font-medium">{formatPrice(driver.avg_cost)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
+<td className="px-6 py-4 whitespace-nowrap">
+                       <div className="font-medium text-blue-600 hover:text-blue-800">{driver.driver_name}</div>
+                     </td>
+                     <td className="px-6 py-4 whitespace-nowrap text-gray-600 text-sm">
+                       <div className="flex items-center">
+                         <Phone className="h-4 w-4 mr-1" />
+                         {formatPhone(driver.driver_phone)}
+                       </div>
+                     </td>
+                     <td className="px-6 py-4 whitespace-nowrap text-gray-900">{driver.total_trips || 0}</td>
+                     <td className="px-6 py-4 whitespace-nowrap text-gray-900">{driver.unique_routes || 0}</td>
+                     <td className="px-6 py-4 whitespace-nowrap text-green-600 font-medium">{formatPrice(driver.avg_cost)}</td>
+                     <td className="px-6 py-4 whitespace-nowrap text-blue-600 font-medium">{formatPrice(driver.total_cost)}</td>
+                   </tr>
+                 ))}
+               </tbody>
+             </table>
+           </div>
+         </div>
+       )}
 
-        {/* Автопарк */}
-        {activeTab === 'vehicles' && (
-          <div className="space-y-6">
-            <div className="bg-white rounded-lg shadow p-6">
-              <h2 className="text-lg font-semibold mb-4">Статистика автопарка</h2>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="bg-blue-50 rounded-lg p-4">
-                  <div className="flex items-center">
-                  <Car className="h-8 w-8 text-blue-600" />
+       {/* Автопарк */}
+       {activeTab === 'vehicles' && (
+         <div className="space-y-6">
+           <div className="bg-white rounded-lg shadow p-6">
+             <h2 className="text-lg font-semibold mb-4">Статистика автопарка</h2>
+             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+               <div className="bg-blue-50 rounded-lg p-4">
+                 <div className="flex items-center">
+                   <Car className="h-8 w-8 text-blue-600" />
                    <div className="ml-4">
-                     <div className="text-2xl font-bold text-blue-900">{masterData.filter(r => r.brand).length}</div>
+                     <div className="text-2xl font-bold text-blue-900">{masterData.filter(r => r['Марка']).length}</div>
                      <div className="text-blue-600">Записей с авто</div>
                    </div>
                  </div>
@@ -602,7 +615,7 @@ const DispatcherPanel = () => {
                    <DollarSign className="h-8 w-8 text-green-600" />
                    <div className="ml-4">
                      <div className="text-2xl font-bold text-green-900">
-                       {formatPrice(masterData.reduce((sum, r) => sum + (r.price_declared || 0), 0) / masterData.length)}
+                       {formatPrice(masterData.reduce((sum, r) => sum + (r['ОБЪЯВЛЕННАЯ ЦЕНА'] || 0), 0) / masterData.length)}
                      </div>
                      <div className="text-green-600">Средняя цена</div>
                    </div>
@@ -613,9 +626,9 @@ const DispatcherPanel = () => {
                    <TrendingUp className="h-8 w-8 text-orange-600" />
                    <div className="ml-4">
                      <div className="text-2xl font-bold text-orange-900">
-                       {formatPrice(masterData.reduce((sum, r) => sum + (r.margin || 0), 0) / masterData.length)}
+                       {formatPrice(masterData.reduce((sum, r) => sum + (r['СЕБЕСТОИМОСТЬ МАРШРУТА'] || 0), 0) / masterData.length)}
                      </div>
-                     <div className="text-orange-600">Средняя маржа</div>
+                     <div className="text-orange-600">Средняя себестоимость</div>
                    </div>
                  </div>
                </div>
@@ -631,7 +644,7 @@ const DispatcherPanel = () => {
                    {[
                      { id: 'brands', name: 'По брендам' },
                      { id: 'models', name: 'По моделям' },
-                     { id: 'source', name: 'По источникам' }
+                     { id: 'routes', name: 'По маршрутам' }
                    ].map(view => (
                      <button
                        key={view.id}
@@ -656,8 +669,8 @@ const DispatcherPanel = () => {
                      <div className="space-y-2 max-h-96 overflow-y-auto">
                        {Object.entries(
                          masterData.reduce((acc, record) => {
-                           if (record.brand) {
-                             acc[record.brand] = (acc[record.brand] || 0) + 1;
+                           if (record['Марка']) {
+                             acc[record['Марка']] = (acc[record['Марка']] || 0) + 1;
                            }
                            return acc;
                          }, {})
@@ -679,12 +692,12 @@ const DispatcherPanel = () => {
                      <div className="space-y-2 max-h-96 overflow-y-auto">
                        {Object.entries(
                          masterData.reduce((acc, record) => {
-                           if (record.brand && record.price_declared) {
-                             if (!acc[record.brand]) {
-                               acc[record.brand] = { total: 0, count: 0 };
+                           if (record['Марка'] && record['ОБЪЯВЛЕННАЯ ЦЕНА']) {
+                             if (!acc[record['Марка']]) {
+                               acc[record['Марка']] = { total: 0, count: 0 };
                              }
-                             acc[record.brand].total += record.price_declared;
-                             acc[record.brand].count += 1;
+                             acc[record['Марка']].total += record['ОБЪЯВЛЕННАЯ ЦЕНА'];
+                             acc[record['Марка']].count += 1;
                            }
                            return acc;
                          }, {})
@@ -708,14 +721,14 @@ const DispatcherPanel = () => {
                    <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4 max-h-96 overflow-y-auto">
                      {Object.entries(
                        masterData.reduce((acc, record) => {
-                         if (record.model && record.brand) {
-                           const key = `${record.brand} ${record.model}`;
+                         if (record['Модель'] && record['Марка']) {
+                           const key = `${record['Марка']} ${record['Модель']}`;
                            if (!acc[key]) {
                              acc[key] = { count: 0, prices: [] };
                            }
                            acc[key].count += 1;
-                           if (record.price_declared) {
-                             acc[key].prices.push(record.price_declared);
+                           if (record['ОБЪЯВЛЕННАЯ ЦЕНА']) {
+                             acc[key].prices.push(record['ОБЪЯВЛЕННАЯ ЦЕНА']);
                            }
                          }
                          return acc;
@@ -740,25 +753,33 @@ const DispatcherPanel = () => {
                  </div>
                )}
 
-               {vehicleView === 'source' && (
+               {vehicleView === 'routes' && (
                  <div>
-                   <h4 className="font-medium mb-4">Источники данных об автомобилях</h4>
+                   <h4 className="font-medium mb-4">Статистика по маршрутам</h4>
                    <div className="space-y-2">
                      {Object.entries(
                        masterData.reduce((acc, record) => {
-                         if (record.vehicle_source) {
-                           acc[record.vehicle_source] = (acc[record.vehicle_source] || 0) + 1;
+                         if (record['Маршрут']) {
+                           if (!acc[record['Маршрут']]) {
+                             acc[record['Маршрут']] = { count: 0, totalPrice: 0, totalCost: 0 };
+                           }
+                           acc[record['Маршрут']].count += 1;
+                           if (record['ОБЪЯВЛЕННАЯ ЦЕНА']) acc[record['Маршрут']].totalPrice += record['ОБЪЯВЛЕННАЯ ЦЕНА'];
+                           if (record['СЕБЕСТОИМОСТЬ МАРШРУТА']) acc[record['Маршрут']].totalCost += record['СЕБЕСТОИМОСТЬ МАРШРУТА'];
                          }
                          return acc;
                        }, {})
                      )
-                       .sort(([,a], [,b]) => b - a)
-                       .map(([source, count]) => (
-                         <div key={source} className="flex justify-between items-center py-3 border-b border-gray-100">
-                           <span className="font-medium">{source}</span>
+                       .sort(([,a], [,b]) => b.count - a.count)
+                       .slice(0, 10)
+                       .map(([route, data]) => (
+                         <div key={route} className="flex justify-between items-center py-3 border-b border-gray-100">
+                           <span className="font-medium">{route}</span>
                            <div className="text-right">
-                             <div className="text-gray-900">{count} записей</div>
-                             <div className="text-xs text-gray-500">{((count / masterData.length) * 100).toFixed(1)}%</div>
+                             <div className="text-gray-900">{data.count} рейсов</div>
+                             <div className="text-xs text-green-600">
+                               Ср. цена: {formatPrice(data.totalPrice / data.count)}
+                             </div>
                            </div>
                          </div>
                        ))}
@@ -810,12 +831,12 @@ const DispatcherPanel = () => {
                  <div className="text-sm text-gray-600">Маршрутов</div>
                </div>
                <div className="text-center">
-                 <div className="text-2xl font-bold text-orange-600">{formatPrice(selectedDriver.avg_declared)}</div>
-                 <div className="text-sm text-gray-600">Ср. цена</div>
+                 <div className="text-2xl font-bold text-orange-600">{formatPrice(selectedDriver.avg_cost)}</div>
+                 <div className="text-sm text-gray-600">Ср. стоимость</div>
                </div>
                <div className="text-center">
-                 <div className="text-2xl font-bold text-purple-600">{formatPrice(selectedDriver.avg_cost)}</div>
-                 <div className="text-sm text-gray-600">Ср. ставка</div>
+                 <div className="text-2xl font-bold text-purple-600">{formatPrice(selectedDriver.total_cost)}</div>
+                 <div className="text-sm text-gray-600">Общая стоимость</div>
                </div>
              </div>
            </div>
@@ -931,7 +952,7 @@ const DispatcherPanel = () => {
                          </div>
                          <div className="bg-purple-50 rounded-lg p-3 text-center">
                            <div className="text-lg font-bold text-purple-700">{formatPrice(route.avgCost)}</div>
-                           <div className="text-xs text-purple-600">Ср. ставка</div>
+                           <div className="text-xs text-purple-600">Ср. стоимость</div>
                          </div>
                          <div className="bg-orange-50 rounded-lg p-3 text-center">
                            <div className="text-lg font-bold text-orange-700">{formatPrice(route.avgMargin)}</div>
@@ -991,12 +1012,12 @@ const DispatcherPanel = () => {
                  <div className="text-sm text-gray-600">Водителей</div>
                </div>
                <div className="text-center">
-                 <div className="text-2xl font-bold text-orange-600">{formatPrice(selectedRoute.avg_declared)}</div>
-                 <div className="text-sm text-gray-600">Ср. цена</div>
+                 <div className="text-2xl font-bold text-orange-600">{formatPrice(selectedRoute.avg_cost)}</div>
+                 <div className="text-sm text-gray-600">Ср. стоимость</div>
                </div>
                <div className="text-center">
-                 <div className="text-2xl font-bold text-purple-600">{formatPrice(selectedRoute.avg_cost)}</div>
-                 <div className="text-sm text-gray-600">Ср. ставка</div>
+                 <div className="text-2xl font-bold text-purple-600">{formatPrice(selectedRoute.total_cost)}</div>
+                 <div className="text-sm text-gray-600">Общая стоимость</div>
                </div>
              </div>
            </div>
@@ -1095,7 +1116,7 @@ const DispatcherPanel = () => {
        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
            <div>
-             <div className="text-2xl font-bold text-blue-600">{masterData.length}</div>
+           <div className="text-2xl font-bold text-blue-600">{masterData.length}</div>
              <div className="text-sm text-gray-600">Всего рейсов</div>
            </div>
            <div>
