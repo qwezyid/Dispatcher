@@ -134,11 +134,14 @@ const DispatcherPanel = () => {
       if (!routes[routeKey]) {
         routes[routeKey] = {
           route: routeKey,
+          origin_city: trip.origin_city,
+          dest_city: trip.dest_city,
           trips: 0,
           prices: [],
           costs: [],
           margins: [],
-          lastDate: null
+          lastDate: null,
+          cities: []
         };
       }
       routes[routeKey].trips++;
@@ -147,6 +150,18 @@ const DispatcherPanel = () => {
       if (trip.margin) routes[routeKey].margins.push(trip.margin);
       if (trip.date && (!routes[routeKey].lastDate || new Date(trip.date) > new Date(routes[routeKey].lastDate))) {
         routes[routeKey].lastDate = trip.date;
+      }
+    });
+
+    // Добавляем информацию о городах из сегментов
+    Object.values(routes).forEach(route => {
+      const segment = segmentData.find(s => 
+        s.origin_city === route.origin_city && s.dest_city === route.dest_city
+      );
+      if (segment && segment.segments) {
+        route.cities = segment.segments.split(' → ');
+      } else {
+        route.cities = [route.origin_city, route.dest_city];
       }
     });
 
@@ -162,6 +177,70 @@ const DispatcherPanel = () => {
   const openDriverCard = (driver) => {
     setSelectedDriver(driver);
     setShowDriverModal(true);
+  };
+
+  // Функция для открытия карточки маршрута
+  const openRouteCard = (route) => {
+    setSelectedRoute(route);
+    setShowRouteModal(true);
+  };
+
+  // Получение детальной информации о маршруте
+  const getRouteDetails = (originCity, destCity) => {
+    const routeTrips = masterData.filter(trip => 
+      trip.origin_city === originCity && trip.dest_city === destCity
+    );
+    
+    const drivers = {};
+    const cities = new Set([originCity]);
+    
+    routeTrips.forEach(trip => {
+      // Собираем водителей
+      if (!drivers[trip.driver_name]) {
+        drivers[trip.driver_name] = {
+          driver_name: trip.driver_name,
+          driver_phone: trip.driver_phone,
+          trips: 0,
+          prices: [],
+          costs: [],
+          margins: [],
+          lastDate: null,
+          vehicles: new Set()
+        };
+      }
+      drivers[trip.driver_name].trips++;
+      if (trip.price_declared) drivers[trip.driver_name].prices.push(trip.price_declared);
+      if (trip.route_cost) drivers[trip.driver_name].costs.push(trip.route_cost);
+      if (trip.margin) drivers[trip.driver_name].margins.push(trip.margin);
+      if (trip.brand && trip.model) drivers[trip.driver_name].vehicles.add(`${trip.brand} ${trip.model}`);
+      if (trip.date && (!drivers[trip.driver_name].lastDate || new Date(trip.date) > new Date(drivers[trip.driver_name].lastDate))) {
+        drivers[trip.driver_name].lastDate = trip.date;
+      }
+    });
+
+    // Ищем промежуточные города из сегментов
+    const routeSegment = segmentData.find(segment => 
+      segment.origin_city === originCity && segment.dest_city === destCity
+    );
+    
+    if (routeSegment && routeSegment.segments) {
+      const segmentCities = routeSegment.segments.split(' → ');
+      segmentCities.forEach(city => cities.add(city));
+    }
+    
+    cities.add(destCity);
+
+    return {
+      drivers: Object.values(drivers).map(driver => ({
+        ...driver,
+        vehicles: Array.from(driver.vehicles),
+        avgPrice: driver.prices.length ? driver.prices.reduce((a, b) => a + b, 0) / driver.prices.length : 0,
+        avgCost: driver.costs.length ? driver.costs.reduce((a, b) => a + b, 0) / driver.costs.length : 0,
+        avgMargin: driver.margins.length ? driver.margins.reduce((a, b) => a + b, 0) / driver.margins.length : 0
+      })).sort((a, b) => b.trips - a.trips),
+      cities: Array.from(cities),
+      totalTrips: routeTrips.length
+    };
   };
 
   // Форматирование цены
@@ -283,14 +362,21 @@ const DispatcherPanel = () => {
                     {searchResults.exact.length > 0 ? (
                       <div className="space-y-3">
                         {searchResults.exact.map((route, idx) => (
-                          <div key={idx} className="border rounded-lg p-3 hover:bg-gray-50">
-                            <div className="font-medium">{route.origin_city} → {route.dest_city}</div>
+                          <div 
+                            key={idx} 
+                            className="border rounded-lg p-3 hover:bg-gray-50 cursor-pointer transition-colors"
+                            onClick={() => openRouteCard(route)}
+                          >
+                            <div className="font-medium text-blue-600 hover:text-blue-800">{route.origin_city} → {route.dest_city}</div>
                             <div className="text-sm text-gray-600 mt-1">
                               <div>Рейсов: {route.total_trips}</div>
                               <div>Водителей: {route.unique_drivers}</div>
                               <div className="text-green-600 font-medium">
                                 Ср. цена: {formatPrice(route.avg_declared)}
                               </div>
+                            </div>
+                            <div className="text-xs text-gray-500 mt-2">
+                              Нажмите для просмотра деталей →
                             </div>
                           </div>
                         ))}
@@ -407,9 +493,13 @@ const DispatcherPanel = () => {
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
                   {topRoutes.map((route, idx) => (
-                    <tr key={idx} className="hover:bg-gray-50">
+                    <tr 
+                      key={idx} 
+                      className="hover:bg-gray-50 cursor-pointer"
+                      onClick={() => openRouteCard(route)}
+                    >
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="font-medium text-gray-900">{route.origin_city} → {route.dest_city}</div>
+                        <div className="font-medium text-blue-600 hover:text-blue-800">{route.origin_city} → {route.dest_city}</div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-gray-900">{route.total_trips || 0}</td>
                       <td className="px-6 py-4 whitespace-nowrap text-gray-900">{route.unique_drivers || 0}</td>
@@ -500,85 +590,85 @@ const DispatcherPanel = () => {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="bg-blue-50 rounded-lg p-4">
                   <div className="flex items-center">
-                    <Car className="h-8 w-8 text-blue-600" />
-                    <div className="ml-4">
-                      <div className="text-2xl font-bold text-blue-900">{masterData.filter(r => r.brand).length}</div>
-                      <div className="text-blue-600">Записей с авто</div>
-                    </div>
-                  </div>
-                </div>
-                <div className="bg-green-50 rounded-lg p-4">
-                  <div className="flex items-center">
-                    <DollarSign className="h-8 w-8 text-green-600" />
-                    <div className="ml-4">
-                      <div className="text-2xl font-bold text-green-900">
-                        {formatPrice(masterData.reduce((sum, r) => sum + (r.price_declared || 0), 0) / masterData.length)}
-                      </div>
-                      <div className="text-green-600">Средняя цена</div>
-                    </div>
-                  </div>
-                </div>
-                <div className="bg-orange-50 rounded-lg p-4">
-                  <div className="flex items-center">
-                    <TrendingUp className="h-8 w-8 text-orange-600" />
-                    <div className="ml-4">
-                      <div className="text-2xl font-bold text-orange-900">
-                        {formatPrice(masterData.reduce((sum, r) => sum + (r.margin || 0), 0) / masterData.length)}
-                      </div>
-                      <div className="text-orange-600">Средняя маржа</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
+                  <Car className="h-8 w-8 text-blue-600" />
+                   <div className="ml-4">
+                     <div className="text-2xl font-bold text-blue-900">{masterData.filter(r => r.brand).length}</div>
+                     <div className="text-blue-600">Записей с авто</div>
+                   </div>
+                 </div>
+               </div>
+               <div className="bg-green-50 rounded-lg p-4">
+                 <div className="flex items-center">
+                   <DollarSign className="h-8 w-8 text-green-600" />
+                   <div className="ml-4">
+                     <div className="text-2xl font-bold text-green-900">
+                       {formatPrice(masterData.reduce((sum, r) => sum + (r.price_declared || 0), 0) / masterData.length)}
+                     </div>
+                     <div className="text-green-600">Средняя цена</div>
+                   </div>
+                 </div>
+               </div>
+               <div className="bg-orange-50 rounded-lg p-4">
+                 <div className="flex items-center">
+                   <TrendingUp className="h-8 w-8 text-orange-600" />
+                   <div className="ml-4">
+                     <div className="text-2xl font-bold text-orange-900">
+                       {formatPrice(masterData.reduce((sum, r) => sum + (r.margin || 0), 0) / masterData.length)}
+                     </div>
+                     <div className="text-orange-600">Средняя маржа</div>
+                   </div>
+                 </div>
+               </div>
+             </div>
+           </div>
 
-            {/* Выбор типа статистики */}
-            <div className="bg-white rounded-lg shadow">
-              <div className="p-6 border-b">
-                <div className="flex justify-between items-center">
-                  <h3 className="text-lg font-semibold">Детальная статистика</h3>
-                  <div className="flex space-x-2">
-                    {[
-                      { id: 'brands', name: 'По брендам' },
-                      { id: 'models', name: 'По моделям' },
-                      { id: 'source', name: 'По источникам' }
-                    ].map(view => (
-                      <button
-                        key={view.id}
-                        onClick={() => setVehicleView(view.id)}
-                        className={`px-4 py-2 rounded text-sm ${
-                          vehicleView === view.id
-                            ? 'bg-blue-600 text-white'
-                            : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                        }`}
-                      >
-                        {view.name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-              <div className="p-6">
-                {vehicleView === 'brands' && (
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    <div>
-                      <h4 className="font-medium mb-4">Популярные бренды</h4>
-                      <div className="space-y-2 max-h-96 overflow-y-auto">
-                        {Object.entries(
-                          masterData.reduce((acc, record) => {
-                            if (record.brand) {
-                              acc[record.brand] = (acc[record.brand] || 0) + 1;
-                            }
-                            return acc;
-                          }, {})
-                        )
-                          .sort(([,a], [,b]) => b - a)
-                          .map(([brand, count]) => (
-                            <div key={brand} className="flex justify-between items-center py-2 border-b border-gray-100">
-                              <span className="font-medium">{brand}</span>
-                              <div className="text-right">
-                                <div className="text-gray-900">{count} рейсов</div>
-                                <div className="text-xs text-gray-500">{((count / masterData.length) * 100).toFixed(1)}%</div>
+           {/* Выбор типа статистики */}
+           <div className="bg-white rounded-lg shadow">
+             <div className="p-6 border-b">
+               <div className="flex justify-between items-center">
+                 <h3 className="text-lg font-semibold">Детальная статистика</h3>
+                 <div className="flex space-x-2">
+                   {[
+                     { id: 'brands', name: 'По брендам' },
+                     { id: 'models', name: 'По моделям' },
+                     { id: 'source', name: 'По источникам' }
+                   ].map(view => (
+                     <button
+                       key={view.id}
+                       onClick={() => setVehicleView(view.id)}
+                       className={`px-4 py-2 rounded text-sm ${
+                         vehicleView === view.id
+                           ? 'bg-blue-600 text-white'
+                           : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                       }`}
+                     >
+                       {view.name}
+                     </button>
+                   ))}
+                 </div>
+               </div>
+             </div>
+             <div className="p-6">
+               {vehicleView === 'brands' && (
+                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                   <div>
+                     <h4 className="font-medium mb-4">Популярные бренды</h4>
+                     <div className="space-y-2 max-h-96 overflow-y-auto">
+                       {Object.entries(
+                         masterData.reduce((acc, record) => {
+                           if (record.brand) {
+                             acc[record.brand] = (acc[record.brand] || 0) + 1;
+                           }
+                           return acc;
+                         }, {})
+                       )
+                         .sort(([,a], [,b]) => b - a)
+                         .map(([brand, count]) => (
+                           <div key={brand} className="flex justify-between items-center py-2 border-b border-gray-100">
+                             <span className="font-medium">{brand}</span>
+                             <div className="text-right">
+                               <div className="text-gray-900">{count} рейсов</div>
+                               <div className="text-xs text-gray-500">{((count / masterData.length) * 100).toFixed(1)}%</div>
                              </div>
                            </div>
                          ))}
@@ -742,30 +832,116 @@ const DispatcherPanel = () => {
              </div>
              <div className="space-y-3">
                {getDriverDetails(selectedDriver.driver_name).map((route, idx) => (
-                 <div key={idx} className="border rounded-lg p-4 hover:bg-gray-50">
-                   <div className="flex justify-between items-start">
+                 <div key={idx} className="border border-gray-200 rounded-xl p-6 hover:bg-gray-50 transition-colors">
+                   <div className="flex justify-between items-start mb-4">
                      <div className="flex-1">
-                       <h4 className="font-semibold text-lg">{route.route}</h4>
-                       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-2 text-sm">
-                         <div>
-                           <span className="text-gray-600">Рейсов:</span>
-                           <span className="ml-2 font-medium">{route.trips}</span>
+                       <h4 className="text-xl font-bold text-gray-900 mb-2">{route.route}</h4>
+                       
+                       {/* Визуализация маршрута */}
+                       <div className="bg-gradient-to-r from-blue-50 to-green-50 rounded-lg p-4 mb-4">
+                         <h5 className="text-sm font-semibold text-gray-700 mb-3">Маршрут через {route.cities.length} городов:</h5>
+                         
+                         {/* Компактное отображение маршрута */}
+                         <div className="flex items-center justify-between">
+                           {/* Начальный город */}
+                           <div className="flex flex-col items-center min-w-0">
+                             <div className="w-4 h-4 bg-green-500 rounded-full shadow-sm"></div>
+                             <div className="mt-2 px-3 py-1 bg-white rounded-full shadow-sm border text-sm font-semibold text-gray-800 text-center">
+                               {route.cities[0]}
+                             </div>
+                             <div className="text-xs text-green-600 mt-1 font-medium">Старт</div>
+                           </div>
+
+                           {/* Линия прогресса с промежуточными городами */}
+                           <div className="flex-1 mx-4">
+                             <div className="relative">
+                               {/* Линия маршрута */}
+                               <div className="absolute top-2 left-0 right-0 h-0.5 bg-gradient-to-r from-green-400 to-red-400"></div>
+                               
+                               {/* Промежуточные города */}
+                               {route.cities.length > 2 && (
+                                 <div className="relative flex justify-center">
+                                   <div className="bg-white rounded-lg shadow-md border px-3 py-2 max-w-xs">
+                                     <div className="text-xs text-gray-600 text-center">
+                                       <span className="font-medium text-blue-600">{route.cities.length - 2}</span> промежуточных городов
+                                     </div>
+                                     <div className="text-xs text-gray-500 mt-1 text-center">
+                                       {route.cities.slice(1, -1).length <= 3 ? (
+                                         // Показываем все города если их мало
+                                         route.cities.slice(1, -1).join(' → ')
+                                       ) : (
+                                         // Показываем первые 2 и последний с многоточием
+                                         `${route.cities[1]} → ${route.cities[2]} → ... → ${route.cities[route.cities.length - 2]}`
+                                       )}
+                                     </div>
+                                   </div>
+                                   {/* Точка на линии */}
+                                   <div className="absolute top-1.5 left-1/2 transform -translate-x-1/2 w-1 h-1 bg-blue-400 rounded-full"></div>
+                                 </div>
+                               )}
+                             </div>
+                           </div>
+
+                           {/* Конечный город */}
+                           <div className="flex flex-col items-center min-w-0">
+                             <div className="w-4 h-4 bg-red-500 rounded-full shadow-sm"></div>
+                             <div className="mt-2 px-3 py-1 bg-white rounded-full shadow-sm border text-sm font-semibold text-gray-800 text-center">
+                               {route.cities[route.cities.length - 1]}
+                             </div>
+                             <div className="text-xs text-red-600 mt-1 font-medium">Финиш</div>
+                           </div>
                          </div>
-                         <div>
-                           <span className="text-gray-600">Ср. цена:</span>
-                           <span className="ml-2 font-medium text-green-600">{formatPrice(route.avgPrice)}</span>
+
+                         {/* Детальный список городов (сворачиваемый) */}
+                         {route.cities.length > 3 && (
+                           <details className="mt-4">
+                             <summary className="cursor-pointer text-xs text-blue-600 hover:text-blue-800 font-medium">
+                               Показать все города маршрута ({route.cities.length})
+                             </summary>
+                             <div className="mt-3 flex flex-wrap gap-1">
+                               {route.cities.map((city, cityIdx) => (
+                                 <span
+                                   key={cityIdx}
+                                   className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-medium ${
+                                     cityIdx === 0 ? 'bg-green-100 text-green-800' :
+                                     cityIdx === route.cities.length - 1 ? 'bg-red-100 text-red-800' :
+                                     'bg-blue-100 text-blue-800'
+                                   }`}
+                                 >
+                                   {cityIdx === 0 && '🟢 '}
+                                   {cityIdx === route.cities.length - 1 && '🔴 '}
+                                   {cityIdx > 0 && cityIdx < route.cities.length - 1 && '🔵 '}
+                                   {city}
+                                 </span>
+                               ))}
+                             </div>
+                           </details>
+                         )}
+                       </div>
+
+                       {/* Статистика */}
+                       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                         <div className="bg-blue-50 rounded-lg p-3 text-center">
+                           <div className="text-lg font-bold text-blue-700">{route.trips}</div>
+                           <div className="text-xs text-blue-600">Рейсов</div>
                          </div>
-                         <div>
-                           <span className="text-gray-600">Ср. ставка:</span>
-                           <span className="ml-2 font-medium text-blue-600">{formatPrice(route.avgCost)}</span>
+                         <div className="bg-green-50 rounded-lg p-3 text-center">
+                           <div className="text-lg font-bold text-green-700">{formatPrice(route.avgPrice)}</div>
+                           <div className="text-xs text-green-600">Ср. цена</div>
                          </div>
-                         <div>
-                           <span className="text-gray-600">Ср. маржа:</span>
-                           <span className="ml-2 font-medium text-orange-600">{formatPrice(route.avgMargin)}</span>
+                         <div className="bg-purple-50 rounded-lg p-3 text-center">
+                           <div className="text-lg font-bold text-purple-700">{formatPrice(route.avgCost)}</div>
+                           <div className="text-xs text-purple-600">Ср. ставка</div>
+                         </div>
+                         <div className="bg-orange-50 rounded-lg p-3 text-center">
+                           <div className="text-lg font-bold text-orange-700">{formatPrice(route.avgMargin)}</div>
+                           <div className="text-xs text-orange-600">Ср. маржа</div>
                          </div>
                        </div>
+
                        {route.lastDate && (
-                         <div className="mt-2 text-sm text-gray-500">
+                         <div className="mt-3 flex items-center text-sm text-gray-500">
+                           <Calendar className="h-4 w-4 mr-2" />
                            Последний рейс: {new Date(route.lastDate).toLocaleDateString('ru-RU')}
                          </div>
                        )}
@@ -773,6 +949,141 @@ const DispatcherPanel = () => {
                    </div>
                  </div>
                ))}
+             </div>
+           </div>
+         </div>
+       </div>
+     )}
+
+     {/* Модальное окно с карточкой маршрута */}
+     {showRouteModal && selectedRoute && (
+       <div 
+         className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
+         onClick={() => setShowRouteModal(false)}
+       >
+         <div 
+           className="bg-white rounded-lg max-w-6xl w-full max-h-[90vh] overflow-hidden"
+           onClick={(e) => e.stopPropagation()}
+         >
+           <div className="p-6 border-b bg-green-50">
+             <div className="flex justify-between items-start">
+               <div>
+                 <h2 className="text-2xl font-bold text-gray-900">{selectedRoute.origin_city} → {selectedRoute.dest_city}</h2>
+                 <p className="text-gray-600 mt-1">Детальная информация о маршруте</p>
+               </div>
+               <button
+                 onClick={() => setShowRouteModal(false)}
+                 className="ml-4 bg-white hover:bg-gray-100 text-gray-600 hover:text-gray-800 rounded-full p-2 shadow-md transition-colors flex-shrink-0"
+                 title="Закрыть"
+               >
+                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                 </svg>
+               </button>
+             </div>
+             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
+               <div className="text-center">
+                 <div className="text-2xl font-bold text-blue-600">{selectedRoute.total_trips}</div>
+                 <div className="text-sm text-gray-600">Всего рейсов</div>
+               </div>
+               <div className="text-center">
+                 <div className="text-2xl font-bold text-green-600">{selectedRoute.unique_drivers}</div>
+                 <div className="text-sm text-gray-600">Водителей</div>
+               </div>
+               <div className="text-center">
+                 <div className="text-2xl font-bold text-orange-600">{formatPrice(selectedRoute.avg_declared)}</div>
+                 <div className="text-sm text-gray-600">Ср. цена</div>
+               </div>
+               <div className="text-center">
+                 <div className="text-2xl font-bold text-purple-600">{formatPrice(selectedRoute.avg_cost)}</div>
+                 <div className="text-sm text-gray-600">Ср. ставка</div>
+               </div>
+             </div>
+           </div>
+           
+           <div className="p-6 overflow-y-auto max-h-[70vh]">
+             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+               {/* Города по маршруту */}
+               <div>
+                 <div className="flex justify-between items-center mb-4">
+                   <h3 className="text-lg font-semibold">Города по маршруту</h3>
+                 </div>
+                 <div className="bg-gray-50 rounded-lg p-4">
+                   <div className="space-y-3">
+                     {getRouteDetails(selectedRoute.origin_city, selectedRoute.dest_city).cities.map((city, idx) => (
+                       <div key={idx} className="flex items-center">
+                         <div className="flex-shrink-0">
+                           {idx === 0 ? (
+                             <div className="w-3 h-3 bg-green-500 rounded-full"></div>
+                           ) : idx === getRouteDetails(selectedRoute.origin_city, selectedRoute.dest_city).cities.length - 1 ? (
+                             <div className="w-3 h-3 bg-red-500 rounded-full"></div>
+                           ) : (
+                             <div className="w-3 h-3 bg-blue-400 rounded-full"></div>
+                           )}
+                         </div>
+                         <div className="ml-3">
+                           <div className="font-medium text-gray-900">{city}</div>
+                           <div className="text-xs text-gray-500">
+                             {idx === 0 ? 'Отправление' : 
+                              idx === getRouteDetails(selectedRoute.origin_city, selectedRoute.dest_city).cities.length - 1 ? 'Назначение' : 
+                              'Промежуточный город'}
+                           </div>
+                         </div>
+                         {idx < getRouteDetails(selectedRoute.origin_city, selectedRoute.dest_city).cities.length - 1 && (
+                           <div className="ml-3 text-gray-400">
+                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                             </svg>
+                           </div>
+                         )}
+                       </div>
+                     ))}
+                   </div>
+                 </div>
+               </div>
+
+               {/* Водители на маршруте */}
+               <div>
+                 <h3 className="text-lg font-semibold mb-4">Водители на маршруте</h3>
+                 <div className="space-y-3 max-h-96 overflow-y-auto">
+                   {getRouteDetails(selectedRoute.origin_city, selectedRoute.dest_city).drivers.map((driver, idx) => (
+                     <div key={idx} className="border rounded-lg p-3 hover:bg-gray-50">
+                       <div className="flex justify-between items-start">
+                         <div className="flex-1">
+                           <h4 className="font-semibold text-gray-900">{driver.driver_name}</h4>
+                           <div className="text-sm text-gray-600 mt-1">
+                             <div className="flex items-center">
+                               <Phone className="h-3 w-3 mr-1" />
+                               {formatPhone(driver.driver_phone)}
+                             </div>
+                           </div>
+                           <div className="grid grid-cols-2 gap-4 mt-2 text-sm">
+                             <div>
+                               <span className="text-gray-600">Рейсов:</span>
+                               <span className="ml-2 font-medium">{driver.trips}</span>
+                             </div>
+                             <div>
+                               <span className="text-gray-600">Ср. цена:</span>
+                               <span className="ml-2 font-medium text-green-600">{formatPrice(driver.avgPrice)}</span>
+                             </div>
+                           </div>
+                           {driver.vehicles.length > 0 && (
+                             <div className="mt-2 text-xs text-gray-500">
+                               Авто: {driver.vehicles.slice(0, 2).join(', ')}
+                               {driver.vehicles.length > 2 && ` +${driver.vehicles.length - 2}`}
+                             </div>
+                           )}
+                           {driver.lastDate && (
+                             <div className="mt-1 text-xs text-gray-500">
+                               Последний рейс: {new Date(driver.lastDate).toLocaleDateString('ru-RU')}
+                             </div>
+                           )}
+                         </div>
+                       </div>
+                     </div>
+                   ))}
+                 </div>
+               </div>
              </div>
            </div>
          </div>
